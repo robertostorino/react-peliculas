@@ -400,8 +400,339 @@ Ejemplo
 
 ## Validación por Atributos
 
-- StringLength
+- StringLength -> Indica la longitud de la cadena.    
+    
+- Range -> Indica el rango de un valor (entre 0 y 100 por ej)
 
-- Range
+- CreditCard -> Valida el formato de una tarjeta de crédito.
 
-- CreditCard
+- Compare -> Valida que dos propiedades sean iguales. Ej: Para comparar un campo de contraseña y otro de passwordRepeted.
+
+- Phone -> Valida un formato de teléfono.
+
+- RegularExpression
+
+- Url -> Valida que el formato sea de una URL válida.
+
+Ejemplo:
+
+```c#
+
+// Los {} son placeholder, 0 indica el nombre del campo y 1 el primer valor (en este caso el 10)
+
+using System.ComponentModel.DataAnnotations;
+
+namespace PeliculasAPI_vs.Entidades
+{
+    public class Genero
+    {
+        public int Id { get; set; }
+        [Required(ErrorMessage = "El campo {0} es requerido")]
+        [StringLength(10, ErrorMessage = "El campo {0} debe tener {1} caracteres o menos")]
+        public required string Nombre { get; set; }
+
+        [Range(18, 120)]
+        public int Edad {  get; set; }
+
+        [CreditCard]
+        public string? TarjetaDeCredito { get; set; } // Es opcional, porque puede no nos pasen un valor de trajeta válido.
+
+        [Url]
+        public string? Url { get; set; } // Es opcional, porque puede no nos pasen un valor de URL válido.
+    }
+}
+
+```
+
+NOTA: Por convención las clases que van a ser utilizadas como ATRIBUTO en C# terminan con la palabra **Attribute**
+
+### Validaciones personalizadas - Por Atributo
+
+1)  En la clase:
+
+    ```c#
+    using PeliculasAPI_vs.Validaciones;
+    using System.ComponentModel.DataAnnotations;
+
+    namespace PeliculasAPI_vs.Entidades
+    {
+        public class Genero
+        {
+            public int Id { get; set; }
+            [Required(ErrorMessage = "El campo {0} es requerido")]
+            [StringLength(10, ErrorMessage = "El campo {0} debe tener {1} caracteres o menos")]
+            [PrimeraLetraMayuscula] // Al colocar [PrimeraLetraMayuscula] sobre la propiedad, entonces vinculo su valor con value de la validación
+            public required string Nombre { get; set; }
+
+        }
+    }
+    ```
+
+2) En la carpeta de validaciones:
+
+    ```c#
+    using System.ComponentModel.DataAnnotations;
+
+    namespace PeliculasAPI_vs.Validaciones
+    {
+        public class PrimeraLetraMayusculaAttribute: ValidationAttribute
+        {
+            protected override ValidationResult? IsValid(object? value, ValidationContext validationContext)
+            {
+                // IMPORTANTE: Al colocar [PrimeraLetraMayuscula] sobre la propiedad, entonces vinculo su valor con value 
+                // Aquí dentro puedo realizar mi validación
+                
+                if (value is null || string.IsNullOrWhiteSpace(value.ToString()))
+                {
+                    return ValidationResult.Success;
+                }
+
+                var primeraLetra = value.ToString()![0].ToString(); // Toma el primer caracter, que es un char, y le hago el ToString para que sea un string.
+
+                if (primeraLetra != primeraLetra.ToUpper()) 
+                {
+                    return new ValidationResult("La primera letra debe ser mayúscula");
+                }
+
+                return ValidationResult.Success;
+            }
+        }
+    }
+
+    ```
+
+### Validaciones personalizadas - En el Controlador
+
+
+1) En el Repository:
+
+    ```c#
+    // Pregunta si hay algún genero que coincida con el nombre dado.
+
+    public bool Existe(string nombre)
+    {
+        return _generos.Any(g => g.Nombre == nombre);
+    }
+    ```
+
+
+2) En el controller:
+
+
+    ```C#
+    [HttpPost]
+    public IActionResult Post([FromBody] Genero genero)
+    {
+        // Con la librería FluentValidation nos ahorraríamos de hacer las siguientes 2 líneas en el controller.
+        // FluentValidation -> Permite tener unas clases dedicadas para las validaciones de nuestros parámetros.
+        // Por ej: Una clase dedicada a las validaciones de Genero.
+        var repositorio = new RepositorioEnMemoria();
+        var yaExisteUnGeneroConDichoNombre = repositorio.Existe(genero.Nombre);
+
+        if (yaExisteUnGeneroConDichoNombre)
+        {
+            return BadRequest($"Ya existe un género con el nombre {genero.Nombre}");
+        }
+
+        return Ok();
+    }
+    ```
+
+## Inyección de Dependencias
+
+- Es normal separar responsabilidades entre diferentes clases.
+
+- Cuando una clase A utiliza una clase B, decimos que la clase B es una **dependencia** de la clase A.
+
+-  El **Acoplamiento** indica el nivel de **dependencias** entre clases.
+
+    - **Acoplamiento Fuerte** -> Se caracteriza por una dependencia no flexible de otras clases.
+
+        - Generalmente es malo.
+
+        ej: Aquí la clase GenerosController (A) tiene una dependencia de la clase RepositorioEnMemoria (B) -> 
+        
+        A usa B, entonces GenerosController (A) depende de RepositorioEnMemoria (B).
+        
+        No hay forma de utilizar el método Get de **GenerosController** sin utilizar la clase **RepositorioEnMemoria**.
+
+        ```c#
+        [Route("api/generos")]
+        [ApiController]
+        public class GenerosController: ControllerBase
+        {
+            [HttpGet] // api/generos
+            [HttpGet("listado")] // api/generos/listado
+            [HttpGet("/listado-generos")] // listado-generos
+            [OutputCache]
+            public List<Genero> Get()
+            {
+                var repositorio = new RepositorioEnMemoria();
+                var generos = repositorio.ObtenerTodosLosGeneros();
+                return generos;
+            }
+        }
+        ```
+
+    - **Bajo Acoplamiento** (o Acoplamiento Débil) -> Ocurre cuando es fácil intercambiar dependencias.
+        - Una de las formas de lograrlo mediante el uso de **Inyección de dependencias** y el Principio de Inversión de Dependencia.
+
+        - **Inyección de Dependencia**: Es una técnica donde las dependencias de un objeto son suministradas por otro objeto.
+
+        Ej:
+        ```c#
+        public class GenerosController: ControllerBase
+        {
+            // campo donde voy a guardar el repositorio
+            private readonly RepositorioEnMemoria repositorio;
+
+            // Constructor donde inyecto la dependencia RepositorioEnMemoria
+            // Ahora la instancia que recibe viene de un objeto externo a GenerosController
+            public GenerosController(RepositorioEnMemoria repositorio)
+            {
+                this.repositorio = repositorio;
+            }
+            
+            [HttpGet] // api/generos
+            [HttpGet("listado")] // api/generos/listado
+            [HttpGet("/listado-generos")] // listado-generos
+            [OutputCache]
+            public List<Genero> Get()
+            {
+                //var repositorio = new RepositorioEnMemoria();
+                var generos = repositorio.ObtenerTodosLosGeneros();
+                return generos;
+            }
+        }
+        
+        ```
+
+    Para que funcione debo configurar un **Servicio**
+
+    En ASP.NET Core cuando hablamos de Servicios, nos referimos a que cuando solicitemos un tipo (por ejemplo el tipo "RepositorioEnMemoria") que nos sirva una "**instancia de dicha clase**".
+
+    Los **Servicios** se encargan de construir las **dependencias** de nuestras clases.
+
+    Para configurar el Servicio, debo ir a la clase **Program.cs**.
+
+
+    ```c#
+        var builder = WebApplication.CreateBuilder(args);
+
+        // SECCIÓN SERVICIOS
+        // INICIO
+
+            // No importa el orden en que van los servicios, mientras que sea dentro de la sección Servicios.
+
+            builder.Services.AddTransient<RepositorioEnMemoria>(); 
+            // Indica que RepositorioEnMemoria debe ser construido
+        
+        // FIN
+
+        var app = builder.Build();
+    ```
+
+### Principio de Inversión de Dependencias
+
+Establece que mis clases deben depender de abstracciones y no de tipos concretos.
+
+Y la clase repositorio es un tipo concreto... Para ello utilizaremos una **Interface**
+
+- **Interface**: Es como un contrato, que cada clase que la implemente debe seguir.
+
+- Por convención, las Interfaces en c# se escriben con letra "I"al principio y luego el nombre del repositorio. Ej: **IRepositorio**
+
+- En la interface se describen las distintas acciones que un Repositorio de Generos puede hacer.
+
+- La acción se llama Asignatura:
+
+    (Conjunto de "Datos de Salida", "Nombre del Método" y "Parámetros de entrada")
+
+
+ej:
+
+```c#
+using PeliculasAPI_vs.Entidades;
+
+namespace PeliculasAPI_vs
+{
+    public interface IRepositorio
+    {
+        // Describe las distintas acciones que un Repositorio de Generos puede hacer
+
+        // Esta es la Asignatura (Conjunto de "Datos de Salida", "Nombre del Método" y "Parámetros de entrada")
+        List<Genero> ObtenerTodosLosGeneros();
+
+        Task<Genero?> ObtenerPorId(int id);
+
+        bool Existe(string nombre);
+    }
+}
+```
+
+Luego, para que se utilice, en RespositorioEnMemoria.cs debo indicar que **implementa** la interface **IRepositorio**.
+
+```c#
+public class RepositorioEnMemoria: IRepositorio
+```
+
+Luego en el Controller:
+
+```c#
+[Route("api/generos")]
+[ApiController]
+public class GenerosController: ControllerBase
+{
+    // campo donde voy a guardar el repositorio
+    //private readonly RepositorioEnMemoria repositorio;
+    private readonly IRepositorio repositorio;
+
+    // Constructor donde inyecto la dependencia RepositorioEnMemoria
+    // Ahora la instancia que recibe viene de un objeto externo a GenerosController
+    
+    //public GenerosController(RepositorioEnMemoria repositorio)
+    //{
+    //    this.repositorio = repositorio;
+    //}
+
+    // Ya la dependencia no será con el OBJETO CONCRETO RepositorioEnMemoria
+    // Ahora dependerá de un TIPO ABSTRACTO que es la interface IRepositorio
+    public GenerosController(IRepositorio repositorio)
+    {
+        this.repositorio = repositorio;
+    }
+
+    //
+}
+```
+
+- Ya no tendrá dependencia de un **OBJETO CONCRETO** como es **RepositorioEnMemoria**.
+
+- GenerosController ahora dependerá de un **TIPO ABSTRACTO** que es la interface **IRepostirio**.
+
+- Por tanto, estoy siguiendo el **Principio de Inversión de Dependencia**.
+
+- GeneroController no sabe ni le interesa la existencia de RepositorioEnMemoria.
+
+- Ahora se logró una dependencia con **Bajo Acoplamiento**, porque hay Alta Flexibilidad.
+
+Por último, debo modificar Program.cs:
+
+```c#
+        var builder = WebApplication.CreateBuilder(args);
+
+        // SECCIÓN SERVICIOS
+        // INICIO
+
+            // No importa el orden en que van los servicios, mientras que sea dentro de la sección Servicios.
+
+            builder.Services.AddTransient<IRepositorio, RepositorioEnMemoria>(); 
+            // Indica que RepositorioEnMemoria debe ser construido
+            // Indica que si alguna clase le pide que inyecte un IRepositorio, entonces le sirva un RepositorioEnMemoria
+            // IRepositorio -> El Servicio
+            // RepositorioEnMemoria -> Implementación del servicio
+        
+        // FIN
+
+        var app = builder.Build();
+    ```
