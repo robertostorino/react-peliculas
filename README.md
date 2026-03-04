@@ -719,20 +719,172 @@ public class GenerosController: ControllerBase
 Por último, debo modificar Program.cs:
 
 ```c#
-        var builder = WebApplication.CreateBuilder(args);
+var builder = WebApplication.CreateBuilder(args);
 
-        // SECCIÓN SERVICIOS
-        // INICIO
+// SECCIÓN SERVICIOS
+// INICIO
 
-            // No importa el orden en que van los servicios, mientras que sea dentro de la sección Servicios.
+    // No importa el orden en que van los servicios, mientras que sea dentro de la sección Servicios.
 
-            builder.Services.AddTransient<IRepositorio, RepositorioEnMemoria>(); 
-            // Indica que RepositorioEnMemoria debe ser construido
-            // Indica que si alguna clase le pide que inyecte un IRepositorio, entonces le sirva un RepositorioEnMemoria
-            // IRepositorio -> El Servicio
-            // RepositorioEnMemoria -> Implementación del servicio
-        
-        // FIN
+    builder.Services.AddTransient<IRepositorio, RepositorioEnMemoria>(); 
+    // Indica que RepositorioEnMemoria debe ser construido
+    // Indica que si alguna clase le pide que inyecte un IRepositorio, entonces le sirva un RepositorioEnMemoria
+    // IRepositorio -> El Servicio
+    // RepositorioEnMemoria -> Implementación del servicio
 
-        var app = builder.Build();
-    ```
+// FIN
+
+var app = builder.Build();
+```
+
+## Tiempo de Vida de Servicios
+
+- Transient
+    - Menor tiempo de vida.
+    - Cada vez que se solicite una instancia de dicho servicio, esa instancia será totalmente nueva.
+    - Se utiliza cuando no hay estado compartido. Cuando la clase no tiene campos que querramos compartir entre instancias.
+
+- Scoped
+    - Cuando se crea una única instancia por petición HTTP.
+    - No importa cuantas veces se solicite el mismo servicio, siempre que sea dentro del mismo contexto HTTP será entregada la misma instancia de la clase.
+    - Útil cuando quiero preservar estado dentro de la solicitud HTTP.
+
+- Singleton
+    - Se crea una única instancia del servicio durante la vida de la aplicación.
+    - No importa cuántas veces se solicite el servicio, siempre se entregará la misma instancia aún sea a usuarios distintos.
+    - Útil cuando quiero tener un estado global o caché, por ej.
+
+Ejemplo
+
+Creo la clase:
+
+```c#
+namespace PeliculasAPI_vs
+{
+    public class ServicioTransient
+    {
+        private readonly Guid _id;
+        public ServicioTransient()
+        {
+            _id = Guid.NewGuid(); // Guid es un string aleatorio
+        }
+
+        public Guid ObtenerId => _id;
+    }
+
+    public class ServicioScoped
+    {
+        private readonly Guid _id;
+        public ServicioScoped()
+        {
+            _id = Guid.NewGuid();
+        }
+
+        public Guid ObtenerId => _id;
+    }
+
+    public class ServicioSingleton
+    {
+        private readonly Guid _id;
+        public ServicioSingleton()
+        {
+            _id = Guid.NewGuid();
+        }
+
+        public Guid ObtenerId => _id;
+    }
+}
+```
+
+Habilito en Program.cs:
+
+```c#
+builder.Services.AddTransient<ServicioTransient>();
+builder.Services.AddScoped<ServicioScoped>();
+builder.Services.AddSingleton<ServicioSingleton>();
+```
+
+Configuro en el Controller:
+
+```c#
+public class GenerosController: ControllerBase
+{
+    // Campos para Inyección de Dependencia
+    private readonly IRepositorio repositorio;
+    private readonly ServicioTransient transient1;
+    private readonly ServicioTransient transient2;
+    private readonly ServicioScoped scoped1;
+    private readonly ServicioScoped scoped2;
+    private readonly ServicioSingleton singleton;
+
+    // Inyecto las dependencias
+    public GenerosController(IRepositorio repositorio,
+        ServicioTransient transient1,
+        ServicioTransient transient2,
+        ServicioScoped scoped1,
+        ServicioScoped scoped2,
+        ServicioSingleton singleton
+        )
+    {
+        this.repositorio = repositorio;
+        this.transient1 = transient1;
+        this.transient2 = transient2;
+        this.scoped1 = scoped1;
+        this.scoped2 = scoped2;
+        this.singleton = singleton;
+    }
+
+    // Acción que utiliza los nuevos servicios.
+    [HttpGet("servicios-tiempos-de-vida")]
+    public IActionResult GetServicioTiemposDeVida()
+    {
+        return Ok(new
+        // con el new estoy creando un objeto anónimo
+        {
+            Transients = new { transient1 = transient1.ObtenerId, transient2 = transient2.ObtenerId },
+            Scopeds = new { scroped1 = scoped1.ObtenerId, scoped2 = scoped2.ObtenerId },
+            Singleton = singleton,
+        });
+    }
+}
+```
+
+Al ejecutar el método desde la API se obtiene el siguiente JSON:
+Primera vez:
+```json
+{
+  "transients": {
+    "transient1": "b33658da-a781-43a7-8674-477c193f22b8",
+    "transient2": "45f6b7a8-a4df-4ace-8f75-52cfaa9c2b37"
+  },
+  "scopeds": {
+    "scroped1": "38d8440d-13c5-42f2-bfd1-8b66130cf05d",
+    "scoped2": "38d8440d-13c5-42f2-bfd1-8b66130cf05d"
+  },
+  "singleton": {
+    "obtenerId": "9fef024c-d573-41f4-b6ef-396da032c994"
+  }
+}
+```
+La segunda vez:
+
+```json
+{
+  "transients": {
+    "transient1": "d0f95175-bfe7-474e-8250-da9d03c8afbd",
+    "transient2": "004b3ff0-325f-49cd-9d68-7f1f06489513"
+  },
+  "scopeds": {
+    "scroped1": "4041eb66-fdff-453b-afd4-f1b69501b10d",
+    "scoped2": "4041eb66-fdff-453b-afd4-f1b69501b10d"
+  },
+  "singleton": {
+    "obtenerId": "9fef024c-d573-41f4-b6ef-396da032c994"
+  }
+}
+```
+- **Transient**: El valor de transient1 y transient2 son distintos ya que son instancias distintas. Dichos valores vuelven a cambiar en la segunda petición HTTP.
+
+- **Scoped**: En la misma petición HTTP tiene el mismo valor de instancia, en la segunda petición HTTP son diferentes a la primera pero iguales entre sí.
+
+- **Singleton**: Devuelve el mismo valor mientras la aplicación esté activa.
